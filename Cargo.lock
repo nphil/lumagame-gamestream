@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "lumagame-gamestream"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cc",
  "libc",

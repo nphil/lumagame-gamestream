@@ -97,18 +97,19 @@ pub fn schema() -> SettingsSchema {
 }
 fn choice<'a>(values: &'a Values, key: &str, default: &'a str) -> &'a str { if let Some(Value::Text(v)) = values.get(key) { v } else { default } }
 fn toggle(values: &Values, key: &str, default: bool) -> bool { if let Some(Value::Bool(v)) = values.get(key) { *v } else { default } }
+fn integer(values: &Values, key: &str, default: u32) -> u32 { if let Some(Value::Int(v)) = values.get(key) { u32::try_from(*v).unwrap_or(default) } else { default } }
 #[derive(Debug, Clone)]
 pub struct Options {
     pub width: u32, pub height: u32, pub fps: u32, pub bitrate: u32, pub format: i32, pub codec: Codec, pub hdr: bool, pub virtual_display: bool,
 }
 impl Options {
     pub fn select(values: &Values, display: &Display, host: &ServerInfo) -> Result<Self> {
-        let (width, height) = match choice(values, "resolution", "auto") {
-            "1080p" => (1920, 1080), "1440p" => (2560, 1440), "4k" => (3840, 2160), _ => (display.width.min(3840), display.height.min(2160)),
-        };
-        if width > display.width || height > display.height || width == 0 || height == 0 { return Err(Error::new(Kind::Invalid, "The requested resolution exceeds this display")); }
-        let fps = match choice(values, "fps", "auto") { "30" => 30, "60" => 60, "120" => 120, _ => display.refresh_hz.min(120) };
-        if fps == 0 || fps > display.refresh_hz { return Err(Error::new(Kind::Invalid, "The requested frame rate exceeds this display")); }
+        // The keys and ranges are LumaGame's Streaming settings, so the app's common values apply; a mode above the TV's is lowered to it.
+        let width = integer(values, "width", 3840).min(display.width);
+        let height = integer(values, "height", 2160).min(display.height);
+        if width == 0 || height == 0 { return Err(Error::new(Kind::Invalid, "The display has no usable stream mode")); }
+        let fps = integer(values, "fps", 120).min(display.refresh_hz).min(120);
+        if fps == 0 { return Err(Error::new(Kind::Invalid, "The display has no usable frame rate")); }
         let hdr = toggle(values, "hdr", false);
         let codec = match choice(values, "codec", "auto") {
             "h264" => Codec::H264, "h265" => Codec::H265, "av1" => Codec::Av1,
@@ -197,7 +198,7 @@ mod tests {
         assert_eq!(options.codec, Codec::H265);
         values.insert("codec".into(), Value::Text("av1".into()));
         assert!(Options::select(&values, &display, &info).is_err());
-        values.insert("fps".into(), Value::Text("60".into()));
+        values.insert("fps".into(), Value::Int(60));
         assert_eq!(Options::select(&values, &display, &info).unwrap().format, 0x1000);
         values.insert("hdr".into(), Value::Bool(true));
         assert!(Options::select(&values, &display, &info).is_err());
@@ -206,6 +207,19 @@ mod tests {
         assert_eq!(options.format, 0x200);
         let args = options.launch_arguments(42, &[0; 16], &[1; 16]);
         assert!(args.contains("virtualDisplay=1") && args.contains("mode=3840x2160x60") && args.contains("hdrMode=1"));
+    }
+    #[test]
+    fn the_apps_common_stream_values_apply_and_are_lowered_to_the_display() {
+        let info = ServerInfo::parse(include_str!("../tests/fixtures/serverinfo-apollo.xml")).unwrap();
+        let common = Values::from([
+            ("width".into(), Value::Int(2560)), ("height".into(), Value::Int(1440)), ("fps".into(), Value::Int(120)),
+            ("hdr".into(), Value::Bool(false)), ("bitrate-mbps".into(), Value::Int(150)), ("codec".into(), Value::Text("h264".into())),
+        ]);
+        for (key, value) in &common { assert_eq!(schema().check(key, value), Ok(()), "{key}"); }
+        let values = schema().resolve(&common);
+        let tv = Display { width: 1920, height: 1080, refresh_hz: 60, hdr10: false, codecs: vec![Codec::H264, Codec::H265] };
+        let o = Options::select(&values, &tv, &info).unwrap();
+        assert_eq!((o.width, o.height, o.fps, o.bitrate, o.codec), (1920, 1080, 60, 150_000, Codec::H264));
     }
     #[test]
     fn wake_packet_is_the_standard_six_prefix_and_sixteen_mac_copies() {
