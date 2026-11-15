@@ -1,0 +1,21 @@
+LumaGame GameStream — Copyright (c) 2026 nphil. GPL-3.0-only.
+
+moonlight-common-c, ENet and nanors revisions and archive hashes are in
+moonlight.lock. Original source, copyright notices and licences are included
+in the complete corresponding source release. Compiled dependency licences
+are also included under licenses/ in the binary release.
+
+lumagame-core and lumatv-gfn-pad are MIT-licensed components from
+https://github.com/nphil/lumatv at f6d3eecd298b11f4fe1cc089992a3ca91bee5497.
+Their copyright and permission notice is reproduced in LUMATV-LICENSE.
+Rust dependencies and their licences are pinned by Cargo.lock and included
+in cargo-vendor/ in the complete corresponding source release.
+
+Pairing test keys, certificate and recorded vectors are PUBLIC TEST DATA
+from https://github.com/ClassicOldSong/Apollo/blob/adc5c5a0bd80831ce495434bb16aee2cd4175fb8/tests/unit/test_http_pairing.cpp
+(Apollo contributors, GPL-3.0).
+
+upstream-apollo.xml and upstream-sunshine.xml are unchanged published XML
+fixtures from https://github.com/RamazanKara/nightjar/tree/70ed0004a475ce9f2fe0fe5ae903974d05e1524a/app/src/test/resources/protocol
+(Ramazan Kara and contributors, GPL-3.0). Other XML fixtures describe
+protocol cases and are not captures from the owner's gaming PC.

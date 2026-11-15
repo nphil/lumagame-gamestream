@@ -1,0 +1,10 @@
+{
+  "id": "gamestream",
+  "name": "Sunshine / Apollo",
+  "summary": "Stream games from a paired PC using Sunshine or Apollo.",
+  "kind": "host",
+  "protocol": 1,
+  "exec": "lumagame-gamestream",
+  "license": "GPL-3.0-only",
+  "source": "https://github.com/nphil/lumagame-gamestream/tree/v0.1.0"
+}

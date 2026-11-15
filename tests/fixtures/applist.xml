@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- The app ID is host-local; only an explicit SteamAppId establishes a shared Steam identity. -->
+<root status_code="200">
+<App><AppTitle>Desktop</AppTitle><ID>1</ID><IsHdrSupported>1</IsHdrSupported><UUID>desktop</UUID></App>
+<App><AppTitle>Elden Ring</AppTitle><ID>42</ID><SteamAppId>1245620</SteamAppId><IsHdrSupported>1</IsHdrSupported></App>
+<App><AppTitle>Custom &amp; Local Game</AppTitle><ID>1245620</ID><UnknownField>ignored</UnknownField></App>
+</root>

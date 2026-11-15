@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!-- Protocol fixture based on Apollo adc5c5a0 src/nvhttp.cpp::serverinfo. Not a capture from the owner's PC. -->
+<root status_code="200">
+<hostname>Gaming PC</hostname><appversion>7.1.431.0</appversion><GfeVersion>3.23.0.74</GfeVersion>
+<uniqueid>6bf3c27c-9bbf-4dcb-b222-df151839b0d1</uniqueid><HttpsPort>47984</HttpsPort><ExternalPort>47989</ExternalPort>
+<mac>02:11:22:33:44:55</mac><LocalIP>192.0.2.20</LocalIP><MaxLumaPixelsHEVC>1869449984</MaxLumaPixelsHEVC>
+<ServerCodecModeSupport>197377</ServerCodecModeSupport><PairStatus>1</PairStatus><currentgame>42</currentgame><state>SUNSHINE_SERVER_BUSY</state>
+<Permission>4294967295</Permission><VirtualDisplayCapable>1</VirtualDisplayCapable><VirtualDisplayDriverReady>1</VirtualDisplayDriverReady>
+</root>
