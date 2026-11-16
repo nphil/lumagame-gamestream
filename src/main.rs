@@ -67,7 +67,7 @@ fn auth_failure(e: &Error) -> AuthFail {
 fn descriptor() -> Descriptor {
     Descriptor { id: EngineId::new("gamestream").unwrap(), version: env!("CARGO_PKG_VERSION").into(), capabilities: Capabilities {
         kind: EngineKind::Host, targets: TargetKind::Host, auth: vec![AuthMethod::ShowPin], presentation: Presentation::Feeder,
-        features: BTreeSet::from([Feature::Discovery, Feature::ManualHost, Feature::Wake, Feature::ManyTargets, Feature::Readiness, Feature::Resume, Feature::EndGame, Feature::Stats, Feature::OverlayKeys, Feature::Rumble]),
+        features: BTreeSet::from([Feature::Discovery, Feature::ManualHost, Feature::Wake, Feature::ManyTargets, Feature::Readiness, Feature::Resume, Feature::EndGame, Feature::Stats, Feature::OverlayKeys, Feature::Rumble, Feature::Surround]),
         video: Some(VideoCaps { codecs: vec![Codec::H264, Codec::H265, Codec::Av1], width: 3840, height: 2160, fps: 120, hdr10: true }),
     } }
 }
@@ -197,7 +197,7 @@ impl Engine {
             self.shared.native_starting.store(false, Ordering::Release);
             let native = native?;
             cancel.check()?;
-            Ok(Live { id, target: target.clone(), game: app, native, stream: StreamInfo { codec: options.codec, width: options.width, height: options.height, fps: options.fps, hdr: false, audio_channels: 2, sdr_reason: None }, running: false })
+            Ok(Live { id, target: target.clone(), game: app, native, stream: StreamInfo { codec: options.codec, width: options.width, height: options.height, fps: options.fps, hdr: false, audio_channels: 0, sdr_reason: None }, running: false })
         })();
         match result {
             Ok(live) => self.live = Some(live),
@@ -325,6 +325,7 @@ impl Engine {
             }
             5 => live.native.rumble(f.a as u8, f.b as u16, f.c as u16),
             7 => eprintln!("Moonlight stage {} failed ({})", f.message, f.a),
+            9 => live.stream.audio_channels = f.a as u8,
             _ => {},
         }
     }
@@ -399,7 +400,7 @@ mod tests {
         assert_eq!(manifest.id, descriptor().id);
         assert_eq!(manifest.protocol, ipc::PROTOCOL);
         assert!(descriptor().capabilities.has(Feature::EndGame));
-        assert!(!descriptor().capabilities.has(Feature::Surround));
+        assert!(descriptor().capabilities.has(Feature::Surround));
     }
     #[test]
     fn stop_cancels_a_queued_or_inflight_launch_but_not_another_session() {

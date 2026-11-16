@@ -1,5 +1,5 @@
 /* GPL-3.0-only. LumaGame's callbacks around unmodified moonlight-common-c.
- * gf_proto v1 is an independent socket protocol, not a link to the MIT TV process. */
+ * gf_proto v2 is an independent socket protocol, not a link to the MIT TV process. */
 #include <Limelight.h>
 #include <errno.h>
 #include <poll.h>
@@ -22,16 +22,18 @@
 typedef void (*notify_fn)(void *, int, int, int, int, int, const char *);
 struct gs_config {
     const char *address, *version, *gfe_version, *rtsp_url, *feeder;
-    int width, height, fps, bitrate, format, server_codecs;
+    int width, height, fps, bitrate, format, server_codecs, surround;
     unsigned char key[16], iv[16];
 };
 struct frame { uint8_t type, flags; uint16_t reserved; uint32_t length; };
 struct media { int64_t pts; uint8_t key, pad[7]; };
 struct load { uint32_t codec, width, height, fps, audio, channels, rate, hdr, metadata[15]; int32_t drop, pts_unit; };
+struct load_opus51 { struct load load; uint8_t streams, coupled, mapping[6]; };
 struct gs_stats { uint64_t frames, bytes, client_us, host_tenths, host_samples; uint32_t rtt; int rtt_valid; };
 _Static_assert(sizeof(struct frame) == 8, "gf_frame");
 _Static_assert(sizeof(struct media) == 16, "gf_media_head");
 _Static_assert(sizeof(struct load) == 100, "gf_load");
+_Static_assert(sizeof(struct load_opus51) == 108, "gf_load_opus51");
 
 static int fd = -1, reader_started, started;
 static pthread_t reader;
@@ -40,12 +42,15 @@ static notify_fn notify;
 static void *notify_context;
 static atomic_bool closing, failed, connected, loaded, accepted, announced, measuring;
 static atomic_bool load_sent, hdr_changed, mode_changed, key_requested;
+static atomic_bool audio_ready;
+static OPUS_MULTISTREAM_CONFIGURATION audio_config;
 static atomic_ullong load_time;
 static atomic_ullong stat_frames, stat_bytes, stat_client, stat_host, stat_host_samples;
 static int video_format, video_width, video_height, video_fps;
 static atomic_int hdr_active;
 static uint32_t last_hdr[15];
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000; }
+static int audio_configuration(int surround) { return surround ? AUDIO_CONFIGURATION_51_SURROUND : AUDIO_CONFIGURATION_STEREO; }
 static void tell(int kind, int a, int b, int c, int d, const char *message) { if (notify) notify(notify_context, kind, a, b, c, d, message ? message : ""); }
 static void fail(const char *message) { if (!atomic_exchange(&failed, true) && !atomic_load(&closing)) tell(4, 0, 0, 0, 0, message); }
 static void running(void) {
@@ -90,7 +95,8 @@ static void hdr_metadata(uint32_t out[15]) {
     out[12] = 16; out[13] = 9; out[14] = 9;
 }
 static int send_load(int hdr) {
-    struct load l = { .width = video_width, .height = video_height, .fps = video_fps, .audio = 1, .channels = 2, .rate = 48000, .hdr = hdr, .drop = -1, .pts_unit = 1000000 };
+    struct load_opus51 message = { .load = { .width = video_width, .height = video_height, .fps = video_fps, .audio = 1, .channels = audio_config.channelCount, .rate = 48000, .hdr = hdr, .drop = -1, .pts_unit = 1000000 } };
+    struct load l = message.load;
     l.codec = (video_format & VIDEO_FORMAT_MASK_H264) ? 1 : (video_format & VIDEO_FORMAT_MASK_H265) ? 2 : 4;
     if (hdr) hdr_metadata(l.metadata);
     memcpy(last_hdr, l.metadata, sizeof(last_hdr));
@@ -99,6 +105,14 @@ static int send_load(int hdr) {
     atomic_store(&load_time, now_us());
     atomic_store(&load_sent, true);
     hdr_active = hdr;
+    message.load = l;
+    if (audio_config.channelCount == 6) {
+        static const unsigned order[6] = {0, 2, 1, 4, 5, 3};
+        message.streams = audio_config.streams;
+        message.coupled = audio_config.coupledStreams;
+        for (unsigned i = 0; i < 6; i++) message.mapping[i] = audio_config.mapping[order[i]];
+        return packet_locked(13, &message, sizeof(message));
+    }
     return packet_locked(1, &l, sizeof(l));
 }
 static int video_setup(int format, int width, int height, int fps, void *context, int flags) {
@@ -110,6 +124,7 @@ static int video_setup(int format, int width, int height, int fps, void *context
 }
 static int video_submit(PDECODE_UNIT unit) {
     if (atomic_load(&failed) || atomic_load(&closing)) return DR_NEED_IDR;
+    if (!atomic_load_explicit(&audio_ready, memory_order_acquire)) return DR_NEED_IDR;
     if (unit->fullLength <= 0 || (unsigned)unit->fullLength > MAX_PAYLOAD - sizeof(struct media) - 2) { fail("A video frame exceeds the feeder's 8 MiB limit"); return DR_NEED_IDR; }
     int hdr = unit->hdrActive && (video_format & VIDEO_FORMAT_MASK_10BIT);
     uint64_t clock = now_us();
@@ -159,8 +174,22 @@ static int video_submit(PDECODE_UNIT unit) {
 }
 static int audio_setup(int config, const POPUS_MULTISTREAM_CONFIGURATION opus, void *context, int flags) {
     (void)config; (void)context; (void)flags;
-    /* gf_proto v1 carries a single Opus stream, not a surround mapping table. */
-    if (opus->sampleRate != 48000 || opus->channelCount != 2 || opus->streams != 1 || opus->coupledStreams != 1 || opus->mapping[0] != 0 || opus->mapping[1] != 1) return -1;
+    if (!opus || opus->sampleRate != 48000) return -1;
+    if (opus->channelCount == 2) {
+        if (opus->streams != 1 || opus->coupledStreams != 1 || opus->mapping[0] != 0 || opus->mapping[1] != 1) return -1;
+    } else if (opus->channelCount == 6) {
+        if (opus->streams < 1 || opus->streams > 6 || opus->coupledStreams < 0 ||
+            opus->coupledStreams > opus->streams || opus->streams + opus->coupledStreams != 6) return -1;
+        unsigned mask = 0;
+        for (unsigned i = 0; i < 6; i++) {
+            if (opus->mapping[i] >= 6) return -1;
+            mask |= 1u << opus->mapping[i];
+        }
+        if (mask != 63) return -1;
+    } else return -1;
+    audio_config = *opus;
+    tell(9, opus->channelCount, 0, 0, 0, "");
+    atomic_store_explicit(&audio_ready, true, memory_order_release);
     return 0;
 }
 static void audio_submit(char *data, int size) {
@@ -224,6 +253,7 @@ int gs_start(const struct gs_config *c, notify_fn callback, void *context) {
     atomic_store(&loaded, false); atomic_store(&accepted, false); atomic_store(&announced, false); atomic_store(&load_sent, false);
     atomic_store(&measuring, false); hdr_active = -1; started = 0;
     atomic_store(&hdr_changed, false); atomic_store(&mode_changed, false); atomic_store(&key_requested, false);
+    atomic_store(&audio_ready, false);
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
     if (strlen(c->feeder) >= sizeof(addr.sun_path)) { fail("The feeder socket path is too long"); return -1; }
     strcpy(addr.sun_path, c->feeder);
@@ -240,7 +270,7 @@ int gs_start(const struct gs_config *c, notify_fn callback, void *context) {
         } else fail("The TV feeder closed while reporting an error");
         close_feeder(); return -1;
     }
-    if (h.type != 23 || h.length != sizeof(hello) || read_all(hello, sizeof(hello)) || hello[0] != 1 || hello[1] != 1) { fail("The TV feeder has no compatible video player"); close_feeder(); return -1; }
+    if (h.type != 23 || h.length != sizeof(hello) || read_all(hello, sizeof(hello)) || hello[0] != 2 || hello[1] != 1) { fail("The TV feeder has no compatible video player"); close_feeder(); return -1; }
     timeout.tv_usec = 0; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     if (pthread_create(&reader, NULL, read_feedback, NULL)) { fail("Could not start the feeder reader"); close_feeder(); return -1; }
     reader_started = 1;
@@ -249,7 +279,7 @@ int gs_start(const struct gs_config *c, notify_fn callback, void *context) {
     STREAM_CONFIGURATION stream; LiInitializeStreamConfiguration(&stream);
     stream.width = c->width; stream.height = c->height; stream.fps = c->fps; stream.bitrate = c->bitrate;
     stream.packetSize = 1392; stream.streamingRemotely = STREAM_CFG_AUTO;
-    stream.audioConfiguration = AUDIO_CONFIGURATION_STEREO; stream.supportedVideoFormats = c->format;
+    stream.audioConfiguration = audio_configuration(c->surround); stream.supportedVideoFormats = c->format;
     stream.clientRefreshRateX100 = c->fps * 100; stream.colorSpace = (c->format & VIDEO_FORMAT_MASK_10BIT) ? COLORSPACE_REC_2020 : COLORSPACE_REC_709;
     stream.colorRange = COLOR_RANGE_LIMITED; stream.encryptionFlags = ENCFLG_ALL;
     memcpy(stream.remoteInputAesKey, c->key, 16); memcpy(stream.remoteInputAesIv, c->iv, 16);

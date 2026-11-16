@@ -6,7 +6,7 @@ use std::{ffi::{CStr, CString, c_char, c_int, c_void}, sync::{Arc, Mutex, mpsc::
 #[repr(C)]
 struct Config {
     address: *const c_char, version: *const c_char, gfe_version: *const c_char, rtsp_url: *const c_char, feeder: *const c_char,
-    width: c_int, height: c_int, fps: c_int, bitrate: c_int, format: c_int, server_codecs: c_int, key: [u8;16], iv: [u8;16],
+    width: c_int, height: c_int, fps: c_int, bitrate: c_int, format: c_int, server_codecs: c_int, surround: c_int, key: [u8;16], iv: [u8;16],
 }
 #[repr(C)]
 #[derive(Default)]
@@ -107,7 +107,7 @@ impl NativeSession {
         let string = |s: &str| CString::new(s).map_err(|_| Error::new(Kind::Invalid, "A stream parameter contains a NUL byte"));
         let address = string(&Address::parse(address)?.host)?;
         let version = string(&info.version)?; let gfe = string(&info.gfe_version)?; let rtsp = string(rtsp)?; let feeder = string(feeder)?;
-        let config = Config { address: address.as_ptr(), version: version.as_ptr(), gfe_version: gfe.as_ptr(), rtsp_url: rtsp.as_ptr(), feeder: feeder.as_ptr(), width: options.width as i32, height: options.height as i32, fps: options.fps as i32, bitrate: options.bitrate as i32, format: options.format, server_codecs: info.codecs as i32, key, iv };
+        let config = Config { address: address.as_ptr(), version: version.as_ptr(), gfe_version: gfe.as_ptr(), rtsp_url: rtsp.as_ptr(), feeder: feeder.as_ptr(), width: options.width as i32, height: options.height as i32, fps: options.fps as i32, bitrate: options.bitrate as i32, format: options.format, server_codecs: info.codecs as i32, surround: i32::from(options.surround), key, iv };
         let mut context = Box::new(Context { session, sender, cancel, failure: Mutex::new(None) });
         let rc = unsafe { gs_start(&config, callback, &mut *context as *mut Context as *mut c_void) };
         let failure = context.failure.lock().unwrap().take();
@@ -164,6 +164,17 @@ impl Drop for NativeSession {
 mod tests {
     use super::*;
     #[test]
+    fn native_audio_callback_gates_load_and_keeps_packet_mapping_across_hdr() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("bridge-test");
+        let status = std::process::Command::new("cc")
+            .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                "-Ivendor/moonlight-common-c/src", "native/bridge_test.c", "-lpthread", "-o"])
+            .arg(&binary).status().unwrap();
+        assert!(status.success(), "native bridge test did not compile");
+        assert!(std::process::Command::new(binary).status().unwrap().success());
+    }
+    #[test]
     fn timing_is_opt_in_clears_on_off_and_menu_y_is_one_press() {
         let mut input=InputState {active:true,game:false,mask:1,menus:Default::default(),sampling:false,timing:std::array::from_fn(|_|TimedPad::default())};
         input.timing[0].name="DualShock 4".into();input.timing[0].connected=true;
@@ -200,7 +211,7 @@ mod tests {
             connection.write_all(&packet).unwrap();
         });
         let path = CString::new(socket.as_os_str().as_encoded_bytes()).unwrap();
-        let config = Config { address: c"127.0.0.1".as_ptr(), version: c"7.1.431.-1".as_ptr(), gfe_version: c"3.23.0.74".as_ptr(), rtsp_url: c"rtsp://127.0.0.1:48010".as_ptr(), feeder: path.as_ptr(), width: 1920, height: 1080, fps: 60, bitrate: 20000, format: 1, server_codecs: 1, key: [0;16], iv: [0;16] };
+        let config = Config { address: c"127.0.0.1".as_ptr(), version: c"7.1.431.-1".as_ptr(), gfe_version: c"3.23.0.74".as_ptr(), rtsp_url: c"rtsp://127.0.0.1:48010".as_ptr(), feeder: path.as_ptr(), width: 1920, height: 1080, fps: 60, bitrate: 20000, format: 1, server_codecs: 1, surround: 0, key: [0;16], iv: [0;16] };
         let (sender, receiver) = mpsc::channel();
         let mut context = Box::new(Context { session: SessionId(1), sender, cancel: Arc::new(Cancel::default()), failure: Mutex::new(None) });
         assert_ne!(unsafe { gs_start(&config, callback, (&mut *context as *mut Context).cast()) }, 0);

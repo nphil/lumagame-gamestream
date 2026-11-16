@@ -100,7 +100,7 @@ fn toggle(values: &Values, key: &str, default: bool) -> bool { if let Some(Value
 fn integer(values: &Values, key: &str, default: u32) -> u32 { if let Some(Value::Int(v)) = values.get(key) { u32::try_from(*v).unwrap_or(default) } else { default } }
 #[derive(Debug, Clone)]
 pub struct Options {
-    pub width: u32, pub height: u32, pub fps: u32, pub bitrate: u32, pub format: i32, pub codec: Codec, pub hdr: bool, pub virtual_display: bool,
+    pub width: u32, pub height: u32, pub fps: u32, pub bitrate: u32, pub format: i32, pub codec: Codec, pub hdr: bool, pub virtual_display: bool, pub surround: bool,
 }
 impl Options {
     pub fn select(values: &Values, display: &Display, host: &ServerInfo) -> Result<Self> {
@@ -126,11 +126,11 @@ impl Options {
         let virtual_display = toggle(values, "virtual-display", true) && host.virtual_display;
         if virtual_display && !host.virtual_ready { return Err(Error::new(Kind::Invalid, "Apollo's virtual-display driver is not ready on the PC")); }
         let bitrate = if let Some(Value::Int(v)) = values.get("bitrate-mbps") { *v as u32 * 1000 } else { 50000 };
-        Ok(Self { width, height, fps, bitrate, format, codec, hdr, virtual_display })
+        Ok(Self { width, height, fps, bitrate, format, codec, hdr, virtual_display, surround: choice(values, "audio", "stereo") == "5.1" })
     }
     pub fn launch_arguments(&self, app: u32, key: &[u8; 16], iv: &[u8; 16]) -> String {
         let hdr = if self.hdr { "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0" } else { "" };
-        format!("appid={app}&mode={}x{}x{}&additionalStates=1&sops=1&rikey={}&rikeyid={}&localAudioPlayMode=0&surroundAudioInfo=196610&remoteControllersBitmap=1&gcmap=1&gcpersist=0&virtualDisplay={}&scaleFactor=100{hdr}{}", self.width, self.height, self.fps, crate::state::hex(key), u32::from_be_bytes(iv[..4].try_into().unwrap()), u8::from(self.virtual_display), crate::stream::launch_extensions())
+        format!("appid={app}&mode={}x{}x{}&additionalStates=1&sops=1&rikey={}&rikeyid={}&localAudioPlayMode=0&surroundAudioInfo={}&remoteControllersBitmap=1&gcmap=1&gcpersist=0&virtualDisplay={}&scaleFactor=100{hdr}{}", self.width, self.height, self.fps, crate::state::hex(key), u32::from_be_bytes(iv[..4].try_into().unwrap()), if self.surround { 4128774 } else { 196610 }, u8::from(self.virtual_display), crate::stream::launch_extensions())
     }
 }
 
@@ -207,6 +207,11 @@ mod tests {
         assert_eq!(options.format, 0x200);
         let args = options.launch_arguments(42, &[0; 16], &[1; 16]);
         assert!(args.contains("virtualDisplay=1") && args.contains("mode=3840x2160x60") && args.contains("hdrMode=1"));
+        assert!(args.contains("surroundAudioInfo=196610"));
+        values.insert("audio".into(), Value::Text("5.1".into()));
+        let surround = Options::select(&values, &display, &info).unwrap();
+        assert!(surround.surround);
+        assert!(surround.launch_arguments(42, &[0; 16], &[1; 16]).contains("surroundAudioInfo=4128774"));
     }
     #[test]
     fn the_apps_common_stream_values_apply_and_are_lowered_to_the_display() {
