@@ -44,9 +44,9 @@ extern "C" fn callback(context: *mut c_void, kind: c_int, a: c_int, b: c_int, c:
 struct TimedPad { name:String, connected:bool, timing:Timing, at:u64 }
 struct InputState { active: bool, game: bool, mask: u16, menus: [MenuKeys;4], sampling:bool, timing:[TimedPad;4] }
 impl InputState {
-    fn sample(&mut self,on:bool) {
-        self.sampling=on;
-        if !on {for pad in &mut self.timing {pad.timing=Timing::default();pad.at=0;}}
+    fn sample(&mut self,on:bool,pad_timing:bool) {
+        self.sampling=on && pad_timing;
+        if !self.sampling {for pad in &mut self.timing {pad.timing=Timing::default();pad.at=0;}}
     }
     fn raw(&mut self,slot:u8,report:&RawReport) {
         if !self.active || !self.sampling {return;}
@@ -129,8 +129,8 @@ impl NativeSession {
         }
         Ok(())
     }
-    pub fn stats(&mut self, on: bool) {
-        self.stats = on; self.last_stats = Instant::now(); self.input.state.lock().unwrap().sample(on);
+    pub fn stats(&mut self, on: bool, pad_timing: bool) {
+        self.stats = on; self.last_stats = Instant::now(); self.input.state.lock().unwrap().sample(on,pad_timing);
         unsafe { gs_set_stats(i32::from(on)) }
     }
     pub fn poll_stats(&mut self) -> Option<Stats> {
@@ -169,12 +169,15 @@ mod tests {
         input.timing[0].name="DualShock 4".into();input.timing[0].connected=true;
         let report=|ms:u64| RawReport {kernel_ns:ms*1_000_000,read_ns:ms*1_000_000,..Default::default()};
         input.raw(0,&report(1000));assert!(input.stats(1_000_000_000).is_none());
-        input.sample(true);
+        input.sample(true,false);input.raw(0,&report(1000));assert!(input.stats(1_000_000_000).is_none());
+        input.sample(true,true);
         for ms in [1000,1004,1008,1012] {input.raw(0,&report(ms));}
         let stats=input.stats(1_014_000_000).unwrap();
         assert_eq!((stats.name.as_str(),stats.rate_hz,stats.p99_us,stats.age_ms),("DualShock 4",250.0,4000,2));
         assert_eq!(input.stats(4_000_000_000).unwrap().age_ms,2988);
-        input.sample(false);input.raw(0,&report(4004));assert!(input.stats(4_004_000_000).is_none());
+        input.sample(true,false);input.raw(0,&report(4004));assert!(input.stats(4_004_000_000).is_none());
+        input.sample(false,true);input.raw(0,&report(4008));assert!(input.stats(4_008_000_000).is_none());
+        input.sample(true,true);input.raw(0,&report(4012));assert!(input.stats(4_012_000_000).is_some());
         let y=PadState {buttons:lumatv_gfn_pad::button::Y,..Default::default()};
         let mut keys=Vec::new();
         input.menus[0].feed(&y,|key|keys.push(menu_key(key)));

@@ -298,9 +298,9 @@ impl Engine {
                 let live = self.live.as_ref().filter(|l| l.id == session).ok_or_else(|| Error::new(Kind::Invalid, "That session is not running"))?;
                 live.native.route(input)?;
             }
-            Request::Stats { session, on } => {
+            Request::Stats { session, on, pad_timing } => {
                 let live = self.live.as_mut().filter(|l| l.id == session).ok_or_else(|| Error::new(Kind::Invalid, "That session is not running"))?;
-                live.native.stats(on);
+                live.native.stats(on, pad_timing);
             }
             Request::Action { key } if key == "discover" => self.discover()?,
             Request::Action { .. } => error(&self.output, Some(seq), ErrorCode::Unsupported, "Unknown settings action"),
