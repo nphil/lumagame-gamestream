@@ -1,6 +1,6 @@
 use crate::{host::{Options, ServerInfo}, http::Address, state::{Cancel, Error, Kind, Result}, wire::Output};
-use lumagame_core::{ids::SessionId, ipc::{Event, InputRoute, PadKey, Stats}};
-use lumatv_gfn_pad::{PadConfig, PadEvent, PadRuntime, PadSink, PadState, menu::{MenuKey, MenuKeys}};
+use lumagame_core::{ids::SessionId, ipc::{Event, InputRoute, PadKey, PadStats, Stats}};
+use lumatv_gfn_pad::{PadConfig, PadEvent, PadRuntime, PadSink, PadState, RawReport, lab::Timing, latency, menu::{MenuKey, MenuKeys}};
 use std::{ffi::{CStr, CString, c_char, c_int, c_void}, sync::{Arc, Mutex, mpsc::Sender}, time::{Duration, Instant}};
 
 #[repr(C)]
@@ -40,7 +40,29 @@ extern "C" fn callback(context: *mut c_void, kind: c_int, a: c_int, b: c_int, c:
     }
     let _ = context.sender.send(crate::Message::Feedback(Feedback { session: context.session, kind, a, b, c, d, message }));
 }
-struct InputState { active: bool, game: bool, mask: u16, menus: [MenuKeys;4] }
+#[derive(Default)]
+struct TimedPad { name:String, connected:bool, timing:Timing, at:u64 }
+struct InputState { active: bool, game: bool, mask: u16, menus: [MenuKeys;4], sampling:bool, timing:[TimedPad;4] }
+impl InputState {
+    fn sample(&mut self,on:bool) {
+        self.sampling=on;
+        if !on {for pad in &mut self.timing {pad.timing=Timing::default();pad.at=0;}}
+    }
+    fn raw(&mut self,slot:u8,report:&RawReport) {
+        if !self.active || !self.sampling {return;}
+        if let Some(pad)=self.timing.get_mut(usize::from(slot)) {pad.timing.push(report.kernel_ns);pad.at=report.kernel_ns;}
+    }
+    fn stats(&self,now:u64)->Option<PadStats> {
+        let pad=self.timing.iter().filter(|p|p.connected && p.at>0).max_by_key(|p|p.at)?;
+        let s=pad.timing.summary(now);
+        Some(PadStats {name:pad.name.clone(),reports:s.reports,rate_hz:s.rate_hz,p99_us:s.p99_us,
+            bursts:s.bursts.count,burst_gap_us:s.bursts.gap_us,age_ms:now.saturating_sub(pad.at)/1_000_000})
+    }
+}
+fn menu_key(key:MenuKey)->PadKey {
+    match key {MenuKey::Up=>PadKey::Up,MenuKey::Down=>PadKey::Down,MenuKey::Left=>PadKey::Left,MenuKey::Right=>PadKey::Right,
+        MenuKey::Ok=>PadKey::Ok,MenuKey::Back=>PadKey::Back,MenuKey::Menu=>PadKey::Menu}
+}
 struct Input { state: Mutex<InputState>, session: SessionId, output: Output }
 fn controller(slot: u8, mask: u16, s: PadState) { unsafe { gs_controller(slot, mask & 0xf, s.buttons, s.left_trigger, s.right_trigger, s.left_x, s.left_y, s.right_x, s.right_y) } }
 impl PadSink for Input {
@@ -53,17 +75,25 @@ impl PadSink for Input {
             PadEvent::Report { slot, state, .. } => {
                 if let Some(menu) = input.menus.get_mut(slot as usize) {
                     menu.feed(&state, |key| {
-                        let key = match key { MenuKey::Up => PadKey::Up, MenuKey::Down => PadKey::Down, MenuKey::Left => PadKey::Left, MenuKey::Right => PadKey::Right, MenuKey::Ok => PadKey::Ok, MenuKey::Back => PadKey::Back };
+                        let key = menu_key(key);
                         self.output.told(Event::Key { key, down: true });
                         self.output.told(Event::Key { key, down: false });
                     });
                 }
             }
-            PadEvent::Connected { slot, .. } | PadEvent::Disconnected { slot } => controller(slot, bitmap, PadState::default()),
+            PadEvent::Connected {slot,name,..} => {
+                if let Some(pad)=input.timing.get_mut(usize::from(slot)) {*pad=TimedPad {name,connected:true,..Default::default()};}
+                controller(slot,bitmap,PadState::default());
+            }
+            PadEvent::Disconnected {slot} => {
+                if let Some(pad)=input.timing.get_mut(usize::from(slot)) {*pad=TimedPad::default();}
+                controller(slot,bitmap,PadState::default());
+            }
             PadEvent::Guide { pressed: true, .. } | PadEvent::ExitChord { .. } => self.output.told(Event::Overlay { session: self.session }),
             _ => {},
         }
     }
+    fn raw(&self,slot:u8,report:&RawReport) {self.state.lock().unwrap().raw(slot,report);}
 }
 
 pub struct NativeSession {
@@ -83,8 +113,8 @@ impl NativeSession {
         let failure = context.failure.lock().unwrap().take();
         if rc != 0 { return Err(failure.unwrap_or_else(|| Error::new(Kind::Network, format!("Moonlight could not start the stream (error {rc}). Check Sunshine/Apollo and the PC firewall.")))); }
         if let Some(failure) = failure { unsafe { gs_stop() }; return Err(failure); }
-        let input = Arc::new(Input { state: Mutex::new(InputState { active: true, game: true, mask: 0, menus: Default::default() }), session, output });
-        let pads = PadRuntime::start(PadConfig { boost: None, stats_every: Duration::from_secs(1), ..PadConfig::default() }, input.clone());
+        let input = Arc::new(Input { state: Mutex::new(InputState { active: true, game: true, mask: 0, menus: Default::default(), sampling:false, timing:std::array::from_fn(|_|TimedPad::default()) }), session, output });
+        let pads = PadRuntime::start(PadConfig { boost: None, stats_every: Duration::from_secs(1), raw:true, ..PadConfig::default() }, input.clone());
         pads.set_grab(true);
         Ok(Self { _context: context, input, pads, stats: false, last_stats: Instant::now(), rumble: [(0,0);4], last_rumble: Instant::now() })
     }
@@ -99,7 +129,10 @@ impl NativeSession {
         }
         Ok(())
     }
-    pub fn stats(&mut self, on: bool) { self.stats = on; self.last_stats = Instant::now(); unsafe { gs_set_stats(i32::from(on)) } }
+    pub fn stats(&mut self, on: bool) {
+        self.stats = on; self.last_stats = Instant::now(); self.input.state.lock().unwrap().sample(on);
+        unsafe { gs_set_stats(i32::from(on)) }
+    }
     pub fn poll_stats(&mut self) -> Option<Stats> {
         if self.last_rumble.elapsed() >= Duration::from_secs(30) {
             for (slot, &(low, high)) in self.rumble.iter().enumerate() { if low != 0 || high != 0 { let _ = self.pads.rumble(slot as u8, low, high, 65535); } }
@@ -108,7 +141,8 @@ impl NativeSession {
         if !self.stats || self.last_stats.elapsed() < Duration::from_secs(1) { return None; }
         let seconds = self.last_stats.elapsed().as_secs_f32(); self.last_stats = Instant::now();
         let mut s = NativeStats::default(); unsafe { gs_get_stats(&mut s) };
-        Some(Stats { rtt_ms: (s.rtt_valid != 0).then_some(s.rtt as f32), fps: Some(s.frames as f32 / seconds), bitrate_kbps: Some((s.bytes as f32 * 8.0 / seconds / 1000.0) as u32), client_ms: (s.frames != 0).then(|| s.client_us as f32 / s.frames as f32 / 1000.0), host_ms: (s.host_samples != 0).then(|| s.host_tenths as f32 / s.host_samples as f32 / 10.0), ..Stats::default() })
+        Some(Stats { rtt_ms: (s.rtt_valid != 0).then_some(s.rtt as f32), fps: Some(s.frames as f32 / seconds), bitrate_kbps: Some((s.bytes as f32 * 8.0 / seconds / 1000.0) as u32), client_ms: (s.frames != 0).then(|| s.client_us as f32 / s.frames as f32 / 1000.0), host_ms: (s.host_samples != 0).then(|| s.host_tenths as f32 / s.host_samples as f32 / 10.0),
+            pad:self.input.state.lock().unwrap().stats(latency::mono_ns()), ..Stats::default() })
     }
     pub fn rumble(&mut self, slot: u8, low: u16, high: u16) {
         if let Some(state) = self.rumble.get_mut(slot as usize) { *state = (low, high); let _ = self.pads.rumble(slot, low, high, 65535); }
@@ -129,6 +163,24 @@ impl Drop for NativeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timing_is_opt_in_clears_on_off_and_menu_y_is_one_press() {
+        let mut input=InputState {active:true,game:false,mask:1,menus:Default::default(),sampling:false,timing:std::array::from_fn(|_|TimedPad::default())};
+        input.timing[0].name="DualShock 4".into();input.timing[0].connected=true;
+        let report=|ms:u64| RawReport {kernel_ns:ms*1_000_000,read_ns:ms*1_000_000,..Default::default()};
+        input.raw(0,&report(1000));assert!(input.stats(1_000_000_000).is_none());
+        input.sample(true);
+        for ms in [1000,1004,1008,1012] {input.raw(0,&report(ms));}
+        let stats=input.stats(1_014_000_000).unwrap();
+        assert_eq!((stats.name.as_str(),stats.rate_hz,stats.p99_us,stats.age_ms),("DualShock 4",250.0,4000,2));
+        assert_eq!(input.stats(4_000_000_000).unwrap().age_ms,2988);
+        input.sample(false);input.raw(0,&report(4004));assert!(input.stats(4_004_000_000).is_none());
+        let y=PadState {buttons:lumatv_gfn_pad::button::Y,..Default::default()};
+        let mut keys=Vec::new();
+        input.menus[0].feed(&y,|key|keys.push(menu_key(key)));
+        input.menus[0].feed(&y,|key|keys.push(menu_key(key)));
+        assert_eq!(keys,[PadKey::Menu]);
+    }
     #[test]
     fn feeder_startup_errors_are_reported_without_starting_a_network_stream() {
         use std::{io::Write, os::unix::net::UnixListener, sync::mpsc, thread};

@@ -197,7 +197,7 @@ impl Engine {
             self.shared.native_starting.store(false, Ordering::Release);
             let native = native?;
             cancel.check()?;
-            Ok(Live { id, target: target.clone(), game: app, native, stream: StreamInfo { codec: options.codec, width: options.width, height: options.height, fps: options.fps, hdr: false, audio_channels: 2 }, running: false })
+            Ok(Live { id, target: target.clone(), game: app, native, stream: StreamInfo { codec: options.codec, width: options.width, height: options.height, fps: options.fps, hdr: false, audio_channels: 2, sdr_reason: None }, running: false })
         })();
         match result {
             Ok(live) => self.live = Some(live),
@@ -304,6 +304,7 @@ impl Engine {
             }
             Request::Action { key } if key == "discover" => self.discover()?,
             Request::Action { .. } => error(&self.output, Some(seq), ErrorCode::Unsupported, "Unknown settings action"),
+            Request::RoundTrip { .. } => error(&self.output, Some(seq), ErrorCode::Unsupported, "This engine does not expose round-trip measurements"),
         }
         *self.shared.operation.lock().unwrap() = None;
         Ok(())

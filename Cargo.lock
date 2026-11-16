@@ -141,7 +141,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "lumagame-core"
 version = "0.1.0"
-source = "git+https://github.com/nphil/lumatv?rev=f6d3eecd298b11f4fe1cc089992a3ca91bee5497#f6d3eecd298b11f4fe1cc089992a3ca91bee5497"
+source = "git+https://github.com/nphil/lumatv?rev=3fd3afe311ba7345bb95d3c41a7923f3981c02e1#3fd3afe311ba7345bb95d3c41a7923f3981c02e1"
 dependencies = [
  "serde",
  "serde_json",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "lumagame-gamestream"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cc",
  "libc",
@@ -167,7 +167,7 @@ dependencies = [
 [[package]]
 name = "lumatv-gfn-pad"
 version = "0.1.0"
-source = "git+https://github.com/nphil/lumatv?rev=f6d3eecd298b11f4fe1cc089992a3ca91bee5497#f6d3eecd298b11f4fe1cc089992a3ca91bee5497"
+source = "git+https://github.com/nphil/lumatv?rev=3fd3afe311ba7345bb95d3c41a7923f3981c02e1#3fd3afe311ba7345bb95d3c41a7923f3981c02e1"
 dependencies = [
  "libc",
 ]

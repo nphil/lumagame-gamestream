@@ -6,7 +6,7 @@ in the complete corresponding source release. Compiled dependency licences
 are also included under licenses/ in the binary release.
 
 lumagame-core and lumatv-gfn-pad are MIT-licensed components from
-https://github.com/nphil/lumatv at f6d3eecd298b11f4fe1cc089992a3ca91bee5497.
+https://github.com/nphil/lumatv at 3fd3afe311ba7345bb95d3c41a7923f3981c02e1.
 Their copyright and permission notice is reproduced in LUMATV-LICENSE.
 Rust dependencies and their licences are pinned by Cargo.lock and included
 in cargo-vendor/ in the complete corresponding source release.
